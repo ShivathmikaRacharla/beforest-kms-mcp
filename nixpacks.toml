@@ -1,0 +1,11 @@
+providers = ["node"]
+
+[variables]
+NIXPACKS_NODE_VERSION = "22"
+NODE_ENV = "production"
+
+[phases.install]
+cmds = ["npm ci --omit=dev --no-audit --no-fund"]
+
+[start]
+cmd = "npm start"
