@@ -4,16 +4,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createSearch, inputShape, readConfig } from './search.mjs';
 import { readNetworkConfig } from './network.mjs';
+import { readAuthConfig, requireBearer } from './auth.mjs';
 
-export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}) } = {}) {
+export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}) } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
-    // Host checks are not authentication. Keep any unauthenticated deployment private.
+    // Host checks are not authentication; requireBearer below is.
     // trust proxy remains disabled: forwarded host headers cannot bypass this check.
     if (req.headers.origin || !network.allowedHosts.includes(req.hostname.toLowerCase())) return res.status(403).json({ error: 'Request host or origin is not allowed.' });
     next();
   });
+  // Authenticate before parsing the body so unauthenticated callers cost nothing.
+  app.use('/mcp', requireBearer(auth));
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => res.json({ status: 'ok', mode: network.host === '0.0.0.0' ? 'container-private' : 'local-only' }));
   app.post('/mcp', async (req, res) => {
@@ -42,9 +45,9 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   return app;
 }
 
-export async function startServer(config, port = 3100, network = readNetworkConfig({})) {
+export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({})) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port.');
-  const app = createApp(config, { network });
+  const app = createApp(config, { network, auth });
   return await new Promise((resolve, reject) => {
     const listener = app.listen(port, network.host, () => resolve(listener));
     listener.once('error', reject);
@@ -53,9 +56,11 @@ export async function startServer(config, port = 3100, network = readNetworkConf
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const network = readNetworkConfig();
-    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network);
+    // Container networking can reach the internet through the proxy, so a secret is mandatory there.
+    const auth = readAuthConfig(process.env, { required: network.host === '0.0.0.0' });
+    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth);
     console.log(`MCP listening on ${network.host}:${listener.address().port}; endpoint /mcp`);
-    if (network.host === '0.0.0.0') console.log('Authentication is not enabled. Keep this service on a private network.');
+    console.log(auth.enabled ? 'Bearer authentication is enabled on /mcp.' : 'Authentication is not enabled (local-only mode).');
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => listener.close());
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

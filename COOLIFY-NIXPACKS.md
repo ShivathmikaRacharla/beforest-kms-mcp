@@ -24,6 +24,7 @@ files or credentials. No existing KMS repository or Windmill change is required.
 | PORT | 3100 |
 | HOST | 0.0.0.0 |
 | MCP_ALLOWED_HOSTS | Exact hostname(s) the proxy/private client uses, comma-separated |
+| MCP_AUTH_TOKENS | Shared secret (`openssl rand -hex 32`); mark as secret. Required with HOST=0.0.0.0 |
 
 MCP_ALLOWED_HOSTS entries have no scheme, port or path. Localhost and 127.0.0.1
 are always permitted for internal health checks. The proxy must preserve an
@@ -33,16 +34,16 @@ headers remain rejected; remote server-to-server MCP clients do not need CORS.
 4. Set Ports Exposes to 3100. No public host-port mapping or persistent volume.
    Health check: HTTP GET `/health`, port 3100, expected status 200. This checks
    process liveness, not Windmill credentials or availability.
-5. Authentication is deferred. Before any private deployment, confirm ingress is
-   private and disable/remove any automatically assigned public domain. Being in
-   the KMS project or omitting a custom domain alone does not establish privacy.
-   Do not add a public domain/tunnel until authentication is implemented.
+5. Set MCP_AUTH_TOKENS before deploying: the container exits at startup without it.
+   Every MCP client must send `Authorization: Bearer <secret>`. Verify after deploy:
+   a POST to `/mcp` without the header returns 401.
 6. After separate approval, deploy this new resource only. Check health and use
    an MCP client on the private network to initialize, list tools, and call
    search_knowledge. Its endpoint is `/mcp`. A browser GET returning 405 is normal.
 
 The hostname allowlist mitigates unwanted Host headers; it does NOT authorize
-users. No OAuth, API key authentication or document access controls were added.
+users. The shared bearer secret authenticates clients; per-user OAuth and
+document access by role are not yet implemented.
 
 ## Validation scope
 
