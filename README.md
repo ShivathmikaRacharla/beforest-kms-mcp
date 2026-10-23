@@ -24,6 +24,25 @@ By default the endpoint is `http://127.0.0.1:3100/mcp`; `GET /health` checks liv
 Uses stateless HTTP JSON responses. GET and DELETE on /mcp return 405 by design.
 Official SDK v1.32.1 is pinned; this is the supported v1 maintenance line.
 
+## Authentication
+
+`/mcp` requires `Authorization: Bearer <secret>` whenever `MCP_AUTH_TOKENS` is set,
+and the server refuses to start with `HOST=0.0.0.0` unless it is. Generate a secret with
+`openssl rand -hex 32` (at least 32 characters). To rotate, set `old,new`, move clients to
+`new`, then remove `old`. Wrong or missing secrets get 401 before the body is parsed.
+`/health` stays open. Local-only mode (127.0.0.1) without a secret stays open for development.
+
+This is one shared secret, not per-user sign-in: anyone holding it sees every document.
+Role-based access needs per-user identity (OAuth) and is the next step.
+
+Client examples:
+
+```
+claude mcp add --transport http beforest-knowledge https://kms-mcp.ops.beforest.co/mcp --header "Authorization: Bearer $KMS_MCP_TOKEN"
+```
+
+Claude Desktop (via `mcp-remote`): `npx mcp-remote https://kms-mcp.ops.beforest.co/mcp --header "Authorization:Bearer ${KMS_MCP_TOKEN}"`.
+
 ## Tests
 
 `npm.cmd test` uses fake backend responses: no live secrets or external calls.
@@ -44,10 +63,9 @@ npm.cmd run test:live
 
 - All new files, lockfile, dependencies and project npm cache are in this folder.
 - Existing application files and deployed Windmill scripts are not changed.
-- Authentication and deployment are deferred. Listener defaults to 127.0.0.1.
+- Shared-secret bearer authentication (see above). Listener defaults to 127.0.0.1.
   Optional HOST=0.0.0.0 enables private container networking and requires explicit
   MCP_ALLOWED_HOSTS. Browser Origin and unrecognized Host headers are rejected.
-- Do not proxy or tunnel this unauthenticated trial to the internet.
 - Department is a search filter, not permission enforcement.
 - No full document-list tool is exposed. Upstream document listings are omitted
   from search responses; a dedicated listing tool can be added later.
@@ -55,4 +73,4 @@ npm.cmd run test:live
 - Compatibility with Claude, ChatGPT and Grok is not yet tested.
 - Nixpacks configuration and private Coolify setup steps are in
   [COOLIFY-NIXPACKS.md](COOLIFY-NIXPACKS.md). No Dockerfile is needed.
-- Authentication is required before public exposure. Host checks are not authentication.
+- Host checks are not authentication; the bearer secret is. Per-user roles are not yet enforced.
