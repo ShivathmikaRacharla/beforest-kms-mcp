@@ -23,10 +23,10 @@ const post = (base, headers = {}) => fetch(base + '/mcp', {
 
 test('auth config requires strong secrets and is mandatory when asked', () => {
   assert.equal(readAuthConfig({}).enabled, false);
-  assert.throws(() => readAuthConfig({}, { required: true }), /Set MCP_AUTH_TOKENS/);
+  assert.throws(() => readAuthConfig({}, { required: true }), /Set MCP_USERS/);
   assert.throws(() => readAuthConfig({ MCP_AUTH_TOKENS: 'short' }), /at least 32/);
   assert.throws(() => readAuthConfig({ MCP_AUTH_TOKENS: `${current},tiny` }), /at least 32/);
-  assert.equal(readAuthConfig({ MCP_AUTH_TOKENS: ` ${current} , ${next} ` }).digests.length, 2);
+  assert.equal(readAuthConfig({ MCP_AUTH_TOKENS: ` ${current} , ${next} ` }).users.length, 2);
 });
 test('rejects missing, malformed and wrong secrets before the MCP layer', async () => {
   let calls = 0;
