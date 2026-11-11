@@ -49,7 +49,8 @@ export function createSearch(config, fetchImpl = fetch) {
     const input = inputSchema.parse(rawInput);
     const full = viewer.level === 'oceo';
     // Ask for more than needed when some passages may be filtered out below.
-    const upstream = full ? input : { ...input, limit: Math.min(20, input.limit * 4) };
+    // role lets retrieve_qdrant_chunks filter by level before any passage leaves Windmill.
+    const upstream = { ...(full ? input : { ...input, limit: Math.min(20, input.limit * 4) }), role: viewer.level };
     let response;
     try {
       response = await fetchImpl(`${config.base}/api/w/${encodeURIComponent(config.workspace)}/jobs/run_wait_result/p/f/kms/retrieve_qdrant_chunks`, {

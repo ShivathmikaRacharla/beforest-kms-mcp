@@ -18,7 +18,7 @@ test('validates configuration without echoing credentials', () => {
 test('calls only the fixed retrieval script and preserves citation fields', async () => {
   const search = createSearch(config, async (url, options) => {
     assert.equal(url, 'https://windmill.example/api/w/test/jobs/run_wait_result/p/f/kms/retrieve_qdrant_chunks');
-    assert.deepEqual(JSON.parse(options.body), { question: 'Policy?', department: 'HR', limit: 3 });
+    assert.deepEqual(JSON.parse(options.body), { question: 'Policy?', department: 'HR', limit: 3, role: 'oceo' });
     assert.equal(options.headers.Authorization, 'Bearer secret-test-token');
     assert.equal(options.redirect, 'error');
     return json(fixture);

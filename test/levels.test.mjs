@@ -52,6 +52,7 @@ test('each level sees only its own and lower passages', async () => {
   assert.deepEqual(await files('leader'), ['salaries.pdf', 'plan.pdf', 'leave.pdf', 'marked-up.pdf']);
   assert.deepEqual(await files('employee'), ['leave.pdf']);
   assert.deepEqual(bodies.map(b => b.limit), [10, 20, 20], 'over-fetches only when filtering');
+  assert.deepEqual(bodies.map(b => b.role), ['oceo', 'leader', 'employee'], 'sends the viewer level to Windmill');
   const employee = await search({ question: 'q' }, { name: 'emp', level: 'employee' });
   assert.equal(employee.document_count, null, 'document count hidden below full access');
 });
