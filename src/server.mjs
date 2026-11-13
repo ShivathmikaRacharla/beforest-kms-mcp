@@ -29,7 +29,7 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     }, async (input) => {
       try {
-        const result = await search(input);
+        const result = await search(input, req.kmsUser);
         return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
       } catch (error) {
         return { isError: true, content: [{ type: 'text', text: error.message }] };

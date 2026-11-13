@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const config = { base: 'https://windmill.example', workspace: 'test', token: 'secret-test-token', timeoutMs: 1000 };
 const fixture = { retrieved: true, document_count: 2, documents: [{ private: 'not needed' }], matches: [{ text: 'A relevant passage.', score: 0.8, file_name: 'policy.pdf', dropbox_path: '/Approved/policy.pdf', page_number: 2 }] };
+const boss = { name: 'test', level: 'oceo' };
 const json = value => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
 
 test('validates configuration without echoing credentials', () => {
@@ -17,12 +18,12 @@ test('validates configuration without echoing credentials', () => {
 test('calls only the fixed retrieval script and preserves citation fields', async () => {
   const search = createSearch(config, async (url, options) => {
     assert.equal(url, 'https://windmill.example/api/w/test/jobs/run_wait_result/p/f/kms/retrieve_qdrant_chunks');
-    assert.deepEqual(JSON.parse(options.body), { question: 'Policy?', department: 'HR', limit: 3 });
+    assert.deepEqual(JSON.parse(options.body), { question: 'Policy?', department: 'HR', limit: 3, role: 'oceo' });
     assert.equal(options.headers.Authorization, 'Bearer secret-test-token');
     assert.equal(options.redirect, 'error');
     return json(fixture);
   });
-  const result = await search({ question: ' Policy? ', department: 'HR', limit: 3 });
+  const result = await search({ question: ' Policy? ', department: 'HR', limit: 3 }, boss);
   assert.equal(result.matches[0].page_number, 2);
   assert.equal(result.matches[0].section, null);
   assert.equal(result.documents, undefined);
@@ -30,20 +31,20 @@ test('calls only the fixed retrieval script and preserves citation fields', asyn
 test('invalid inputs never call Windmill', async () => {
   let calls = 0;
   const search = createSearch(config, async () => { calls++; return json(fixture); });
-  for (const input of [{ question: '' }, { question: 'x', limit: 21 }, { question: 'x', limit: 1.5 }, { question: 'x', script_path: 'other' }]) await assert.rejects(search(input));
+  for (const input of [{ question: '' }, { question: 'x', limit: 21 }, { question: 'x', limit: 1.5 }, { question: 'x', script_path: 'other' }]) await assert.rejects(search(input, boss));
   assert.equal(calls, 0);
 });
 test('empty results are a successful search', async () => {
-  const result = await createSearch(config, async () => json({ retrieved: false, matches: [] }))({ question: 'Unknown' });
+  const result = await createSearch(config, async () => json({ retrieved: false, matches: [] }))({ question: 'Unknown' }, boss);
   assert.deepEqual(result.matches, []);
 });
 test('upstream errors do not expose response bodies or credentials', async () => {
   const search = createSearch(config, async () => new Response('secret-test-token internal stack', { status: 401 }));
-  await assert.rejects(search({ question: 'x' }), { message: 'Knowledge search failed (HTTP 401).' });
+  await assert.rejects(search({ question: 'x' }, boss), { message: 'Knowledge search failed (HTTP 401).' });
 });
 test('timeout and malformed responses are handled', async () => {
-  await assert.rejects(createSearch(config, async () => { throw new DOMException('private details', 'TimeoutError'); })({ question: 'x' }), /timed out/);
-  await assert.rejects(createSearch(config, async () => json({ matches: 'wrong' }))({ question: 'x' }), /unexpected response/);
+  await assert.rejects(createSearch(config, async () => { throw new DOMException('private details', 'TimeoutError'); })({ question: 'x' }, boss), /timed out/);
+  await assert.rejects(createSearch(config, async () => json({ matches: 'wrong' }))({ question: 'x' }, boss), /unexpected response/);
 });
 test('official MCP client discovers tool, searches, rejects invalid limits, and receives tool errors', async () => {
   let calls = 0;
