@@ -62,6 +62,19 @@ claude mcp add --transport http beforest-knowledge https://kms-mcp.ops.beforest.
 
 Claude Desktop (via `mcp-remote`): `npx mcp-remote https://kms-mcp.ops.beforest.co/mcp --header "Authorization:Bearer ${KMS_MCP_TOKEN}"`.
 
+## Listing documents (`list_documents`)
+
+`search_knowledge` returns only the passages closest to a question, so it cannot count or list documents.
+`list_documents` is the catalogue: every document the caller's level may see, with the total and the
+count per knowledge space (optional `space` filter). It reads the Dropbox folder names (read-only) with
+the same level rule as search: Team -> everyone, Leadership -> leaders and up, Office of the CEO and
+anything outside a level folder -> Office of the CEO only. Names and counts above the caller's level are
+never returned. The listing is cached for 5 minutes. Files added in the last 5 minutes are marked
+`just_added` (they may still be processing).
+
+On when `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET` and `DROPBOX_REFRESH_TOKEN` are set (the KMS Dropbox app,
+app folder `KMS-Documents (1)`; listing needs only read access).
+
 ## Tests
 
 `npm.cmd test` uses fake backend responses: no live secrets or external calls.
