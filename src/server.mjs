@@ -5,8 +5,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createSearch, inputShape, readConfig } from './search.mjs';
 import { readNetworkConfig } from './network.mjs';
 import { readAuthConfig, requireBearer } from './auth.mjs';
+import { createProcess, processShape, readProcessConfig } from './process.mjs';
 
-export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}) } = {}) {
+export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}), processing = readProcessConfig({}) } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -35,6 +36,23 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
         return { isError: true, content: [{ type: 'text', text: error.message }] };
       }
     });
+    // Offered only when the webhook is configured, so the tool can be switched off in Coolify.
+    if (processing.enabled) {
+      const start = createProcess(processing, fetchImpl);
+      server.registerTool('start_processing', {
+        title: 'Start processing an uploaded document',
+        description: 'Call this right after a document has been saved in Dropbox at "/Apps/KMS-Documents (1)/<Level>/<Space>/<File name>" and the person confirmed the level and space. It starts the existing KMS pipeline so the document becomes searchable in about 1-2 minutes. The level must not be above the caller\'s level. It never moves, renames or deletes files.',
+        inputSchema: processShape,
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      }, async (input) => {
+        try {
+          const result = await start(input, req.kmsUser);
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+        } catch (error) {
+          return { isError: true, content: [{ type: 'text', text: error.message }] };
+        }
+      });
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => { void transport.close().catch(() => {}); void server.close().catch(() => {}); });
     try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
@@ -45,9 +63,9 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   return app;
 }
 
-export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({})) {
+export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({}), processing = readProcessConfig({})) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port.');
-  const app = createApp(config, { network, auth });
+  const app = createApp(config, { network, auth, processing });
   return await new Promise((resolve, reject) => {
     const listener = app.listen(port, network.host, () => resolve(listener));
     listener.once('error', reject);
@@ -58,7 +76,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const network = readNetworkConfig();
     // Container networking can reach the internet through the proxy, so a secret is mandatory there.
     const auth = readAuthConfig(process.env, { required: network.host === '0.0.0.0' });
-    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth);
+    const processing = readProcessConfig();
+    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth, processing);
+    console.log(processing.enabled ? 'start_processing is enabled.' : 'start_processing is off (WINDMILL_WEBHOOK_URL not set).');
     console.log(`MCP listening on ${network.host}:${listener.address().port}; endpoint /mcp`);
     console.log(auth.enabled ? 'Bearer authentication is enabled on /mcp.' : 'Authentication is not enabled (local-only mode).');
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => listener.close());
