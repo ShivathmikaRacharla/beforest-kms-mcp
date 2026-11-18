@@ -62,6 +62,19 @@ claude mcp add --transport http beforest-knowledge https://kms-mcp.ops.beforest.
 
 Claude Desktop (via `mcp-remote`): `npx mcp-remote https://kms-mcp.ops.beforest.co/mcp --header "Authorization:Bearer ${KMS_MCP_TOKEN}"`.
 
+## Start processing (`start_processing`)
+
+After a document is saved in Dropbox at `/Apps/KMS-Documents (1)/<Level>/<Space>/<File name>`,
+call `start_processing` with the Dropbox path, file id, revision and the uploader's name. It starts
+the existing pipeline (`f/kms/process_approved_document_pipeline`) with the same body the email
+intake sent, so the Dropbox -> Windmill handoff is unchanged.
+
+Checks before anything is sent: the level folder (Team, Leadership, Office of the CEO) is not above
+the caller's level, the space is one of the 10 knowledge spaces, and the file name follows
+`[SPACE]_[TYPE]_[Title]_V[n]_[YYYY-MM-DD].pdf|docx|txt|md`. It never moves, renames or deletes files.
+
+Set `WINDMILL_WEBHOOK_URL` and `WINDMILL_WEBHOOK_TOKEN` to switch it on; leave both empty to switch it off.
+
 ## Tests
 
 `npm.cmd test` uses fake backend responses: no live secrets or external calls.
