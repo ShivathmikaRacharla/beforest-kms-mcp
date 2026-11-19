@@ -86,18 +86,19 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     }
   }
 
-  // A short-lived (4 hour) link to one file, for viewing or downloading. Read-only.
-  async function temporaryLink(path) {
-    const response = await rpc('files/get_temporary_link', { path }, 'link');
+  // Opens one file for reading (read-only). Returns the response, whose body streams the file.
+  async function download(path) {
+    const response = await call(`${CONTENT}/files/download`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await accessToken()}`, 'Dropbox-API-Arg': asciiJson({ path }) },
+    }, 'download');
     if (response.status === 409) {
       const summary = await errorSummary(response);
-      if (summary.startsWith('path/not_found')) throw new Error('That file is no longer in Dropbox. Use list_documents to see what is there now.');
-      throw new Error(`Dropbox could not make a link (${summary.split('/')[0] || 'HTTP 409'}).`);
+      if (summary.startsWith('path/not_found')) throw new Error('That file is no longer in Dropbox.');
+      throw new Error(`Dropbox could not open the file (${summary.split('/')[0] || 'HTTP 409'}).`);
     }
-    if (!response.ok) throw new Error(`Dropbox could not make a link (HTTP ${response.status}).`);
-    const data = await response.json();
-    if (typeof data.link !== 'string' || !data.link.startsWith('https://')) throw new Error('Dropbox returned an unexpected link.');
-    return data.link;
+    if (!response.ok || !response.body) throw new Error(`Dropbox could not open the file (HTTP ${response.status}).`);
+    return response;
   }
 
   // Adds a new file. Returns null if the name is already taken (never overwrites).
@@ -122,5 +123,5 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return { id: data.id, rev: data.rev, name: data.name };
   }
 
-  return { listAll, listNames, temporaryLink, upload };
+  return { download, listAll, listNames, upload };
 }
