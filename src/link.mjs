@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { LEVELS } from './auth.mjs';
 import { ROOT } from './kms-folders.mjs';
 import { passageLevel } from './search.mjs';
+import { CSV_MAX_BYTES, CSV_PAGE_CSP, decodeCsv, parseCsv, renderCsvPage } from './csv-view.mjs';
 
 // View and download links for one original document, only if the caller's level allows it.
 // Links point at this server (/doc/<token>), which reads the file from Dropbox (read-only):
@@ -17,6 +18,7 @@ const DOWNLOAD_TYPES = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  csv: 'text/csv; charset=utf-8',
 };
 
 export const linkShape = {
@@ -29,7 +31,8 @@ const NOT_AVAILABLE = 'No document with that name is available to you. Use list_
 const EXPIRED = 'This link has expired or is not valid. Ask Claude for a new link to the document.';
 
 const extensionOf = name => name.split('.').pop().toLowerCase();
-const canView = name => Boolean(VIEWABLE[extensionOf(name)]) || PREVIEW.has(extensionOf(name));
+// CSV is shown as a table built on this server (see csv-view.mjs).
+const canView = name => Boolean(VIEWABLE[extensionOf(name)]) || PREVIEW.has(extensionOf(name)) || extensionOf(name) === 'csv';
 
 // The signing key is derived from the Dropbox app secret, so no extra setting is needed and links
 // survive restarts. Changing that secret invalidates every open link.
@@ -97,6 +100,20 @@ export async function sendDocument(res, dropbox, { path }, download) {
   const extension = extensionOf(name);
   const headers = { ...BASE_HEADERS };
   let upstream;
+  if (!download && extension === 'csv') {
+    upstream = await dropbox.download(path);
+    const size = Number(upstream.headers.get('content-length') || 0);
+    if (size > CSV_MAX_BYTES) {
+      await upstream.body?.cancel().catch(() => {});
+      throw Object.assign(new Error('This CSV file is too large to view in the browser. Please use the Download link.'), { status: 413 });
+    }
+    const bytes = Buffer.from(await upstream.arrayBuffer());
+    if (bytes.length > CSV_MAX_BYTES) throw Object.assign(new Error('This CSV file is too large to view in the browser. Please use the Download link.'), { status: 413 });
+    const page = renderCsvPage(name, parseCsv(decodeCsv(bytes)));
+    res.set({ ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': disposition('inline', `${name}.html`), 'Content-Security-Policy': CSV_PAGE_CSP });
+    res.send(page);
+    return;
+  }
   if (!download && PREVIEW.has(extension)) {
     upstream = await dropbox.preview(path);
     // Dropbox says the preview format can change, so trust what it sends rather than the extension.
