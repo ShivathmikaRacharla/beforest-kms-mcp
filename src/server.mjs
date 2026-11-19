@@ -8,24 +8,59 @@ import { readAuthConfig, requireBearer } from './auth.mjs';
 import { createDropbox, readDropboxConfig } from './dropbox.mjs';
 import { createLister, listShape } from './list.mjs';
 import { createLinker, linkKey, linkShape, sendDocument } from './link.mjs';
+import { createProcess, readProcessConfig } from './process.mjs';
+import { createUploader, departmentsFor, readUploadConfig, uploadKey, uploadShape } from './upload.mjs';
+import { FONT_ORIGIN, PAGE_HTML, PAGE_JS } from './upload-page.mjs';
 
-export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }, now = Date.now } = {}) {
+const PAGE_HEADERS = {
+  'Content-Security-Policy': `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src ${FONT_ORIGIN}; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store',
+};
+
+export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }, processing = { enabled: false }, upload = readUploadConfig({}), now = Date.now } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
-    // Host checks are not authentication; requireBearer below is.
+    // Host checks are not authentication; requireBearer and signed links are.
     // trust proxy remains disabled: forwarded host headers cannot bypass this check.
-    if (req.headers.origin || !network.allowedHosts.includes(req.hostname.toLowerCase())) return res.status(403).json({ error: 'Request host or origin is not allowed.' });
+    if (!network.allowedHosts.includes(req.hostname.toLowerCase())) return res.status(403).json({ error: 'Request host or origin is not allowed.' });
+    // Browsers only call the upload page's own endpoints, and only from that same page.
+    if (req.headers.origin && !(req.path.startsWith('/upload/') && sameOrigin(req))) return res.status(403).json({ error: 'Request host or origin is not allowed.' });
     next();
   });
   // Authenticate before parsing the body so unauthenticated callers cost nothing.
   app.use('/mcp', requireBearer(auth));
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => res.json({ status: 'ok', mode: network.host === '0.0.0.0' ? 'container-private' : 'local-only' }));
-  // The catalogue is on only when the Dropbox settings are present (read-only access).
+  // Dropbox tools are on only when the Dropbox settings are present (uploads also need the pipeline start).
   const box = dropbox.enabled ? createDropbox(dropbox, fetchImpl, now) : undefined;
   const lister = box && createLister(box, now);
   const linker = box && createLinker(lister, linkKey(dropbox), now);
+  // Uploads need Dropbox and the pipeline start (WINDMILL_WEBHOOK_*), so every upload gets indexed.
+  const uploader = box && processing.enabled
+    ? createUploader(upload, { key: uploadKey(dropbox), dropbox: box, startProcess: createProcess(processing, fetchImpl), auth, now })
+    : undefined;
+  if (uploader) {
+    const fail = (res, error) => res.status(error.status || 502).set('Cache-Control', 'no-store').json({ error: error.message });
+    app.get('/upload', (_req, res) => res.set(PAGE_HEADERS).type('html').send(PAGE_HTML));
+    app.get('/upload/app.js', (_req, res) => res.set(PAGE_HEADERS).type('js').send(PAGE_JS));
+    app.get('/upload/check', (req, res) => {
+      try { res.set('Cache-Control', 'no-store').json(uploader.check(req.get('x-upload-token'))); } catch (error) { fail(res, error); }
+    });
+    app.post('/upload/file',
+      // Check the link before reading up to 150 MB.
+      (req, res, next) => { try { uploader.admit(req.get('x-upload-token')); next(); } catch (error) { fail(res, error); } },
+      express.raw({ type: () => true, limit: upload.maxBytes }),
+      async (req, res) => {
+        try {
+          let name;
+          try { name = decodeURIComponent(req.get('x-file-name') || ''); } catch { name = ''; }
+          const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+          res.set('Cache-Control', 'no-store').json(await uploader.upload(req.get('x-upload-token'), name, body));
+          lister?.refresh();
+        } catch (error) { fail(res, error); }
+      });
+  }
   if (linker) {
     // View or download links from get_document_link. The signed token is the only credential.
     app.get('/doc/:token', async (req, res) => {
@@ -71,6 +106,34 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
         }
       });
     }
+    if (uploader) {
+      server.registerTool('list_departments', {
+        title: 'List departments for uploading',
+        description: 'Use first when someone wants to add or upload a document to the Beforest knowledge base. Returns the departments and the level the document will go to (always the person\'s own level, from their key). Show the departments and ask the person to choose one. Never choose or guess the department from the document\'s content.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      }, async () => {
+        try {
+          const result = departmentsFor(req.kmsUser);
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+        } catch (error) {
+          return { isError: true, content: [{ type: 'text', text: error.message }] };
+        }
+      });
+      server.registerTool('upload_document', {
+        title: 'Upload a document to the Beforest knowledge base',
+        description: 'Call only after the person has chosen a department from list_departments. Returns a private upload page link for their own level and that department. Claude cannot pass the file itself, so send the person the upload_link: they open it, choose the file (PDF, Word, PowerPoint, Excel, TXT or MD, up to 150 MB) and press Upload. The page shows the result: file name, folder, Dropbox destination and whether indexing started. The level cannot be changed. The link works once and stops after 4 hours. Send it only to the person who asked.',
+        inputSchema: uploadShape,
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      }, async (input) => {
+        try {
+          const result = uploader.make(input, req.kmsUser, baseUrl(req));
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+        } catch (error) {
+          return { isError: true, content: [{ type: 'text', text: error.message }] };
+        }
+      });
+    }
     if (linker) {
       server.registerTool('get_document_link', {
         title: 'Get a link to view or download a document',
@@ -96,15 +159,19 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   return app;
 }
 
+function sameOrigin(req) {
+  try { return new URL(req.headers.origin).host.toLowerCase() === String(req.headers.host).toLowerCase(); } catch { return false; }
+}
+
 // Links must point back at the address the caller used. The host was already checked against the allowlist.
 function baseUrl(req) {
   const local = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(req.hostname.toLowerCase());
   return local ? `http://${req.headers.host}` : `https://${req.hostname}`;
 }
 
-export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }) {
+export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }, processing = { enabled: false }, upload = readUploadConfig({})) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port.');
-  const app = createApp(config, { network, auth, dropbox });
+  const app = createApp(config, { network, auth, dropbox, processing, upload });
   return await new Promise((resolve, reject) => {
     const listener = app.listen(port, network.host, () => resolve(listener));
     listener.once('error', reject);
@@ -116,8 +183,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Container networking can reach the internet through the proxy, so a secret is mandatory there.
     const auth = readAuthConfig(process.env, { required: network.host === '0.0.0.0' });
     const dropbox = readDropboxConfig();
-    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth, dropbox);
+    const processing = readProcessConfig();
+    const upload = readUploadConfig();
+    const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth, dropbox, processing, upload);
     console.log(dropbox.enabled ? 'list_documents and get_document_link are on.' : 'list_documents and get_document_link are off (Dropbox settings not set).');
+    console.log(dropbox.enabled && processing.enabled ? `list_departments and upload_document are on (max ${Math.round(upload.maxBytes / 1048576)} MB).` : 'list_departments and upload_document are off (needs the Dropbox settings and WINDMILL_WEBHOOK_URL / WINDMILL_WEBHOOK_TOKEN).');
     console.log(`MCP listening on ${network.host}:${listener.address().port}; endpoint /mcp`);
     console.log(auth.enabled ? 'Bearer authentication is enabled on /mcp.' : 'Authentication is not enabled (local-only mode).');
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => listener.close());

@@ -95,6 +95,26 @@ missing one, so its existence is not revealed. The signing key is derived from `
 extra setting is needed; changing that secret invalidates open links. Links are logged (`event: link`), and
 so are opens (`event: view` / `download`).
 
+## Adding a document (`list_departments`, `upload_document`)
+
+1. `list_departments` returns the 10 departments and the level the file will go to. The level is always the
+   person's own level from their key (Team, Leadership or Office of the CEO); it cannot be changed. Claude
+   asks the person to choose a department and never picks one from the document's content.
+2. `upload_document(department)` accepts short names and small typos (`hr`, `fin`, `Finanace`, `BI`,
+   "Team / HR"). Unclear text is refused with the list of departments, never guessed. It returns a private
+   upload page link (`/upload#<signed token>`), valid once for 4 hours.
+3. On the page the person picks the file: PDF, DOCX, PPTX, XLSX, TXT or MD, up to `UPLOAD_MAX_MB` (150).
+   The real file type is checked. The file keeps its own name in `<Level>/<Department>/`; an existing file
+   is never overwritten (`name (2).pdf` instead).
+4. The server then starts the existing pipeline `f/kms/process_approved_document_pipeline` with the Dropbox
+   **file id**, revision, full path and size (`approval_status: approved`, as uploads have no approver).
+   The page shows the file name, folder, Dropbox destination and whether indexing started.
+
+Both tools are on only when the Dropbox settings and `WINDMILL_WEBHOOK_URL` / `WINDMILL_WEBHOOK_TOKEN` are
+set. Upload links are signed with a key derived from `DROPBOX_APP_SECRET`. Each link, upload and indexing
+start is logged (`event: upload_link`, `upload`). If indexing cannot start, the file stays saved and the log
+has its Dropbox file id so it can be started again.
+
 ## Tests
 
 `npm.cmd test` uses fake backend responses: no live secrets or external calls.
