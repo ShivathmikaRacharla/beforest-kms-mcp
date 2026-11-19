@@ -83,7 +83,8 @@ result (a full Dropbox path also works) and returns two links on this server:
 - `view_link` (`/doc/<token>`): shows the file in the browser. PDF, TXT, MD and images are shown as they
   are. Word, PowerPoint and Excel files (.doc/.docx/.rtf/.odt, .ppt/.pptx/.odp, .xls/.xlsx/.ods) are shown
   as Dropbox's own preview (`files/get_preview`: a PDF, or an HTML table for spreadsheets, shown sandboxed).
-  `null` for other types (for example .zip or .csv), which are download only.
+  CSV files are shown as a table built by this server (first 5,000 rows; files up to 25 MB), not by
+  Dropbox, whose CSV preview is unreliable. `null` for other types (for example .zip), which are download only.
 - `download_link` (`/doc/<token>?download=1`): always saves the original file.
 
 If Dropbox cannot make a preview, View answers with a plain message (503 "still preparing", 415 "not
