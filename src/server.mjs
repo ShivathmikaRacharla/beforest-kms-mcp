@@ -7,6 +7,7 @@ import { readNetworkConfig } from './network.mjs';
 import { readAuthConfig, requireBearer } from './auth.mjs';
 import { createDropbox, readDropboxConfig } from './dropbox.mjs';
 import { createLister, listShape } from './list.mjs';
+import { createLinker, linkShape } from './link.mjs';
 
 export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }, now = Date.now } = {}) {
   const app = express();
@@ -22,7 +23,9 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => res.json({ status: 'ok', mode: network.host === '0.0.0.0' ? 'container-private' : 'local-only' }));
   // The catalogue is on only when the Dropbox settings are present (read-only access).
-  const lister = dropbox.enabled ? createLister(createDropbox(dropbox, fetchImpl, now), now) : undefined;
+  const box = dropbox.enabled ? createDropbox(dropbox, fetchImpl, now) : undefined;
+  const lister = box && createLister(box, now);
+  const linker = box && createLinker(lister, box, now);
   app.post('/mcp', async (req, res) => {
     const server = new McpServer({ name: 'beforest-knowledge', version: '0.1.0' });
     const search = createSearch(config, fetchImpl);
@@ -54,6 +57,21 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
         }
       });
     }
+    if (linker) {
+      server.registerTool('get_document_link', {
+        title: 'Get a link to view or download a document',
+        description: 'Use when someone wants to open, view, read the original, or download a document. Give the exact file name from list_documents or from a search result. Returns a private link to the original file that works for 4 hours: PDFs open in the browser, other files download. Only documents at or below the person\'s level are available. Send the link only to the person who asked.',
+        inputSchema: linkShape,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      }, async (input) => {
+        try {
+          const result = await linker(input, req.kmsUser);
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+        } catch (error) {
+          return { isError: true, content: [{ type: 'text', text: error.message }] };
+        }
+      });
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => { void transport.close().catch(() => {}); void server.close().catch(() => {}); });
     try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
@@ -79,7 +97,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const auth = readAuthConfig(process.env, { required: network.host === '0.0.0.0' });
     const dropbox = readDropboxConfig();
     const listener = await startServer(readConfig(), Number(process.env.PORT || 3100), network, auth, dropbox);
-    console.log(dropbox.enabled ? 'list_documents is on.' : 'list_documents is off (Dropbox settings not set).');
+    console.log(dropbox.enabled ? 'list_documents and get_document_link are on.' : 'list_documents and get_document_link are off (Dropbox settings not set).');
     console.log(`MCP listening on ${network.host}:${listener.address().port}; endpoint /mcp`);
     console.log(auth.enabled ? 'Bearer authentication is enabled on /mcp.' : 'Authentication is not enabled (local-only mode).');
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => listener.close());

@@ -75,6 +75,15 @@ never returned. The listing is cached for 5 minutes. Files added in the last 5 m
 On when `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET` and `DROPBOX_REFRESH_TOKEN` are set (the KMS Dropbox app,
 app folder `KMS-Documents (1)`; listing needs only read access).
 
+## Opening a document (`get_document_link`)
+
+For "open / view / download this document". Takes the exact file name from `list_documents` or a search
+result (a full Dropbox path also works) and returns a Dropbox temporary link to the original file. The link
+works for 4 hours: PDFs open in the browser, Word files download. Only documents at or below the caller's
+level are linked; a document above it gets the same "not available" message as a missing one, so its
+existence is not revealed. Read-only; uses the same Dropbox settings as `list_documents`. Each link is logged
+(`event: link`, who, which file).
+
 ## Tests
 
 `npm.cmd test` uses fake backend responses: no live secrets or external calls.

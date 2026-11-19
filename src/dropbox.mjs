@@ -49,11 +49,11 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return cached.token;
   }
 
-  const rpc = async (endpoint, body) => call(`${API}/${endpoint}`, {
+  const rpc = async (endpoint, body, what = 'list') => call(`${API}/${endpoint}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, 'list');
+  }, what);
 
   // File names in a folder. A missing folder is an error: we never create level or space folders.
   async function listNames(folder) {
@@ -86,6 +86,20 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     }
   }
 
+  // A short-lived (4 hour) link to one file, for viewing or downloading. Read-only.
+  async function temporaryLink(path) {
+    const response = await rpc('files/get_temporary_link', { path }, 'link');
+    if (response.status === 409) {
+      const summary = await errorSummary(response);
+      if (summary.startsWith('path/not_found')) throw new Error('That file is no longer in Dropbox. Use list_documents to see what is there now.');
+      throw new Error(`Dropbox could not make a link (${summary.split('/')[0] || 'HTTP 409'}).`);
+    }
+    if (!response.ok) throw new Error(`Dropbox could not make a link (HTTP ${response.status}).`);
+    const data = await response.json();
+    if (typeof data.link !== 'string' || !data.link.startsWith('https://')) throw new Error('Dropbox returned an unexpected link.');
+    return data.link;
+  }
+
   // Adds a new file. Returns null if the name is already taken (never overwrites).
   async function upload(path, bytes) {
     const response = await call(`${CONTENT}/files/upload`, {
@@ -108,5 +122,5 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return { id: data.id, rev: data.rev, name: data.name };
   }
 
-  return { listAll, listNames, upload };
+  return { listAll, listNames, temporaryLink, upload };
 }

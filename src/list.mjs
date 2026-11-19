@@ -47,13 +47,20 @@ export function createLister(dropbox, now = Date.now) {
     return files;
   }
 
+  // Files this viewer may see, each with its catalogue entry and its Dropbox path (app-folder relative).
+  async function visibleFiles(viewer) {
+    if (!LEVELS.includes(viewer?.level)) throw new Error('Listing documents needs a signed-in user.');
+    return (await catalogue())
+      .map(file => ({ file, ...describeFile(file) }))
+      .filter(({ level }) => LEVELS.indexOf(level) <= LEVELS.indexOf(viewer.level))
+      .map(({ file, entry }) => ({ path: file.path, entry: { ...entry, just_added: entry.added ? now() - Date.parse(entry.added) < JUST_ADDED_MS : false } }));
+  }
+
   async function list(rawInput, viewer) {
     if (!LEVELS.includes(viewer?.level)) throw new Error('Listing documents needs a signed-in user.');
     const input = listSchema.parse(rawInput ?? {});
-    const visible = (await catalogue())
-      .map(describeFile)
-      .filter(({ level }) => LEVELS.indexOf(level) <= LEVELS.indexOf(viewer.level))
-      .map(({ entry }) => ({ ...entry, just_added: entry.added ? now() - Date.parse(entry.added) < JUST_ADDED_MS : false }))
+    const visible = (await visibleFiles(viewer))
+      .map(({ entry }) => entry)
       .filter(entry => !input.space || entry.space === input.space)
       .sort((a, b) => a.space.localeCompare(b.space) || a.title.localeCompare(b.title) || (b.version ?? 0) - (a.version ?? 0));
     const bySpace = {};
@@ -69,5 +76,5 @@ export function createLister(dropbox, now = Date.now) {
     };
   }
 
-  return { list, refresh: () => { cache = undefined; } };
+  return { list, visibleFiles, refresh: () => { cache = undefined; } };
 }
