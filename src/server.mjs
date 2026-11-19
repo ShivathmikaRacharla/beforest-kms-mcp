@@ -7,7 +7,7 @@ import { readNetworkConfig } from './network.mjs';
 import { readAuthConfig, requireBearer } from './auth.mjs';
 import { createDropbox, readDropboxConfig } from './dropbox.mjs';
 import { createLister, listShape } from './list.mjs';
-import { createLinker, linkShape } from './link.mjs';
+import { createLinker, linkKey, linkShape, sendDocument } from './link.mjs';
 
 export function createApp(config, { fetchImpl = fetch, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }, now = Date.now } = {}) {
   const app = express();
@@ -25,7 +25,21 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   // The catalogue is on only when the Dropbox settings are present (read-only access).
   const box = dropbox.enabled ? createDropbox(dropbox, fetchImpl, now) : undefined;
   const lister = box && createLister(box, now);
-  const linker = box && createLinker(lister, box, now);
+  const linker = box && createLinker(lister, linkKey(dropbox), now);
+  if (linker) {
+    // View or download links from get_document_link. The signed token is the only credential.
+    app.get('/doc/:token', async (req, res) => {
+      try {
+        const doc = linker.open(req.params.token, auth);
+        const download = req.query.download === '1';
+        await sendDocument(res, box, doc, download);
+        console.log(JSON.stringify({ event: download ? 'download' : 'view', user: doc.user, file_name: doc.path.split('/').pop() }));
+      } catch (error) {
+        if (res.headersSent) return res.destroy();
+        res.status(error.status || 502).set('Cache-Control', 'no-store').type('text/plain').send(error.message);
+      }
+    });
+  }
   app.post('/mcp', async (req, res) => {
     const server = new McpServer({ name: 'beforest-knowledge', version: '0.1.0' });
     const search = createSearch(config, fetchImpl);
@@ -60,12 +74,12 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
     if (linker) {
       server.registerTool('get_document_link', {
         title: 'Get a link to view or download a document',
-        description: 'Use when someone wants to open, view, read the original, or download a document. Give the exact file name from list_documents or from a search result. Returns a private link to the original file that works for 4 hours: PDFs open in the browser, other files download. Only documents at or below the person\'s level are available. Send the link only to the person who asked.',
+        description: 'Always use this when someone wants to see, open, view, read the original of, or download a document, or asks for a link to it. Give the exact file name from list_documents or a search result. Returns a view link (opens in the browser) and a download link (saves the file), both private and valid for 4 hours. Show them as two links, "View" and "Download"; if view_link is null, show only Download. Only documents at or below the person\'s level are available. Send the links only to the person who asked.',
         inputSchema: linkShape,
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }, async (input) => {
         try {
-          const result = await linker(input, req.kmsUser);
+          const result = await linker.make(input, req.kmsUser, baseUrl(req));
           return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
         } catch (error) {
           return { isError: true, content: [{ type: 'text', text: error.message }] };
@@ -80,6 +94,12 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   app.all('/mcp', (_req, res) => res.status(405).set('Allow', 'POST').json({ error: 'Stateless MCP uses POST.' }));
   app.use((error, _req, res, _next) => res.status(error.status === 413 ? 413 : 400).json({ error: 'Invalid request body.' }));
   return app;
+}
+
+// Links must point back at the address the caller used. The host was already checked against the allowlist.
+function baseUrl(req) {
+  const local = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(req.hostname.toLowerCase());
+  return local ? `http://${req.headers.host}` : `https://${req.hostname}`;
 }
 
 export async function startServer(config, port = 3100, network = readNetworkConfig({}), auth = readAuthConfig({}), dropbox = { enabled: false }) {

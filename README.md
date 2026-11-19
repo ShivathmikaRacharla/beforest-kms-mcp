@@ -78,11 +78,18 @@ app folder `KMS-Documents (1)`; listing needs only read access).
 ## Opening a document (`get_document_link`)
 
 For "open / view / download this document". Takes the exact file name from `list_documents` or a search
-result (a full Dropbox path also works) and returns a Dropbox temporary link to the original file. The link
-works for 4 hours: PDFs open in the browser, Word files download. Only documents at or below the caller's
-level are linked; a document above it gets the same "not available" message as a missing one, so its
-existence is not revealed. Read-only; uses the same Dropbox settings as `list_documents`. Each link is logged
-(`event: link`, who, which file).
+result (a full Dropbox path also works) and returns two links on this server:
+
+- `view_link` (`/doc/<token>`): shows the file in the browser (PDF, TXT, MD, images). `null` for types a
+  browser cannot show, such as Word files.
+- `download_link` (`/doc/<token>?download=1`): saves the file.
+
+The server streams the original from Dropbox (read-only); the Dropbox address is never shown. Each link is
+signed, lasts 4 hours, and is checked again when opened: the person who asked must still have a key whose
+level allows the document. A document above the caller's level gets the same "not available" message as a
+missing one, so its existence is not revealed. The signing key is derived from `DROPBOX_APP_SECRET`, so no
+extra setting is needed; changing that secret invalidates open links. Links are logged (`event: link`), and
+so are opens (`event: view` / `download`).
 
 ## Tests
 
