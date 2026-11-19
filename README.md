@@ -80,11 +80,15 @@ app folder `KMS-Documents (1)`; listing needs only read access).
 For "open / view / download this document". Takes the exact file name from `list_documents` or a search
 result (a full Dropbox path also works) and returns two links on this server:
 
-- `view_link` (`/doc/<token>`): shows the file in the browser (PDF, TXT, MD, images). `null` for types a
-  browser cannot show, such as Word files.
-- `download_link` (`/doc/<token>?download=1`): saves the file.
+- `view_link` (`/doc/<token>`): shows the file in the browser. PDF, TXT, MD and images are shown as they
+  are. Word, PowerPoint and Excel files (.doc/.docx/.rtf/.odt, .ppt/.pptx/.odp, .xls/.xlsx/.ods) are shown
+  as Dropbox's own preview (`files/get_preview`: a PDF, or an HTML table for spreadsheets, shown sandboxed).
+  `null` for other types (for example .zip or .csv), which are download only.
+- `download_link` (`/doc/<token>?download=1`): always saves the original file.
 
-The server streams the original from Dropbox (read-only); the Dropbox address is never shown. Each link is
+If Dropbox cannot make a preview, View answers with a plain message (503 "still preparing", 415 "not
+available") pointing to the Download link. The server streams from Dropbox (read-only, the same permission
+as before); the Dropbox address is never shown. Each link is
 signed, lasts 4 hours, and is checked again when opened: the person who asked must still have a key whose
 level allows the document. A document above the caller's level gets the same "not available" message as a
 missing one, so its existence is not revealed. The signing key is derived from `DROPBOX_APP_SECRET`, so no

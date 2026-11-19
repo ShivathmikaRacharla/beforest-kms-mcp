@@ -74,7 +74,7 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
     if (linker) {
       server.registerTool('get_document_link', {
         title: 'Get a link to view or download a document',
-        description: 'Always use this when someone wants to see, open, view, read the original of, or download a document, or asks for a link to it. Give the exact file name from list_documents or a search result. Returns a view link (opens in the browser) and a download link (saves the file), both private and valid for 4 hours. Show them as two links, "View" and "Download"; if view_link is null, show only Download. Only documents at or below the person\'s level are available. Send the links only to the person who asked.',
+        description: 'Always use this when someone wants to see, open, view, read the original of, or download a document, or asks for a link to it. Give the exact file name from list_documents or a search result. Returns a view link (opens in the browser; Word, PowerPoint and Excel files open as a preview) and a download link (saves the original file), both private and valid for 4 hours. Show them as two links, "View" and "Download"; if view_link is null, show only Download. Only documents at or below the person\'s level are available. Send the links only to the person who asked.',
         inputSchema: linkShape,
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }, async (input) => {
