@@ -6,11 +6,13 @@ import { ROOT } from './kms-folders.mjs';
 import { passageLevel } from './search.mjs';
 
 // View and download links for one original document, only if the caller's level allows it.
-// Links point at this server (/doc/<token>), which streams the file from Dropbox, so a PDF can be
-// shown in the browser ("view") or saved ("download"). Each link is signed and lasts 4 hours.
+// Links point at this server (/doc/<token>), which reads the file from Dropbox (read-only):
+// "view" shows it in the browser, "download" saves the original. Each link is signed and lasts 4 hours.
 const LINK_MS = 4 * 60 * 60 * 1000;
 // Types a browser can show safely. Everything else is always sent as a download.
 const VIEWABLE = { pdf: 'application/pdf', txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+// Office types Dropbox can preview (files/get_preview): PDF for documents and slides, HTML for spreadsheets.
+const PREVIEW = new Set(['doc', 'docx', 'docm', 'rtf', 'odt', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'ppsm', 'odp', 'xls', 'xlsx', 'xlsm', 'ods']);
 const DOWNLOAD_TYPES = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -27,6 +29,7 @@ const NOT_AVAILABLE = 'No document with that name is available to you. Use list_
 const EXPIRED = 'This link has expired or is not valid. Ask Claude for a new link to the document.';
 
 const extensionOf = name => name.split('.').pop().toLowerCase();
+const canView = name => Boolean(VIEWABLE[extensionOf(name)]) || PREVIEW.has(extensionOf(name));
 
 // The signing key is derived from the Dropbox app secret, so no extra setting is needed and links
 // survive restarts. Changing that secret invalidates every open link.
@@ -49,7 +52,7 @@ export function createLinker(lister, key, now = Date.now) {
     const expires = now() + LINK_MS;
     const body = Buffer.from(JSON.stringify({ v: 1, p: chosen.path, u: viewer.name, e: Math.floor(expires / 1000) })).toString('base64url');
     const url = `${baseUrl}/doc/${body}.${sign(body)}`;
-    const viewable = Boolean(VIEWABLE[extensionOf(entry.file_name)]);
+    const viewable = canView(entry.file_name);
     console.log(JSON.stringify({ event: 'link', user: viewer.name, level: viewer.level, file_name: entry.file_name, space: entry.space, doc_level: entry.level }));
     return {
       file_name: entry.file_name, title: entry.title, space: entry.space, level: entry.level,
@@ -58,7 +61,7 @@ export function createLinker(lister, key, now = Date.now) {
       download_link: `${url}?download=1`,
       expires_at: new Date(expires).toISOString(),
       how_to_show: viewable
-        ? 'Show both links: "View" opens the document in the browser, "Download" saves it.'
+        ? 'Show both links: "View" opens the document in the browser, "Download" saves the original file.'
         : 'This file type cannot be shown in a browser. Show the "Download" link only.',
       note: 'Give these links only to the person who asked. They stop working after 4 hours.',
     };
@@ -83,20 +86,43 @@ export function createLinker(lister, key, now = Date.now) {
   return { make, open };
 }
 
-// Streams the file to the browser: inline for viewable types unless ?download=1, otherwise as a download.
+const safeName = name => name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+const disposition = (kind, name) => `${kind}; filename="${safeName(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+const BASE_HEADERS = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
+
+// Sends the file to the browser. View: the original for PDF, text and images, Dropbox's preview for Office
+// files. Download (?download=1): always the original file.
 export async function sendDocument(res, dropbox, { path }, download) {
   const name = path.split('/').pop();
   const extension = extensionOf(name);
-  const inline = !download && Boolean(VIEWABLE[extension]);
-  const upstream = await dropbox.download(path);
-  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
-  res.set({
-    'Content-Type': VIEWABLE[extension] || DOWNLOAD_TYPES[extension] || 'application/octet-stream',
-    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
-    'Cache-Control': 'private, no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
-  });
+  const headers = { ...BASE_HEADERS };
+  let upstream;
+  if (!download && PREVIEW.has(extension)) {
+    upstream = await dropbox.preview(path);
+    // Dropbox says the preview format can change, so trust what it sends rather than the extension.
+    const type = String(upstream.headers.get('content-type') || '').toLowerCase();
+    const base = name.replace(/\.[^.]+$/, '');
+    if (type.startsWith('application/pdf')) {
+      Object.assign(headers, { 'Content-Type': 'application/pdf', 'Content-Disposition': disposition('inline', `${base}.pdf`) });
+    } else if (type.startsWith('text/html')) {
+      // Spreadsheet preview: shown with scripts, forms and outside requests blocked.
+      Object.assign(headers, {
+        'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': disposition('inline', `${base}.html`),
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+      });
+    } else {
+      await upstream.body?.cancel().catch(() => {});
+      throw Object.assign(new Error('A preview is not available for this file. Please use the Download link.'), { status: 415 });
+    }
+  } else {
+    const inline = !download && Boolean(VIEWABLE[extension]);
+    upstream = await dropbox.download(path);
+    Object.assign(headers, {
+      'Content-Type': VIEWABLE[extension] || DOWNLOAD_TYPES[extension] || 'application/octet-stream',
+      'Content-Disposition': disposition(inline ? 'inline' : 'attachment', name),
+    });
+  }
+  res.set(headers);
   const length = upstream.headers.get('content-length');
   if (length) res.set('Content-Length', length);
   await new Promise((resolve, reject) => {

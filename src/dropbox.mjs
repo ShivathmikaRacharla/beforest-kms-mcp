@@ -101,6 +101,23 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return response;
   }
 
+  // A ready-made preview of an Office file (read-only, same permission as download): Dropbox returns a PDF
+  // for Word and PowerPoint files and an HTML table for spreadsheets. We only pass it on.
+  async function preview(path) {
+    const response = await call(`${CONTENT}/files/get_preview`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await accessToken()}`, 'Dropbox-API-Arg': asciiJson({ path }) },
+    }, 'preview');
+    if (response.status === 409) {
+      const summary = await errorSummary(response);
+      if (summary.startsWith('path/not_found')) throw new Error('That file is no longer in Dropbox.');
+      if (summary.startsWith('in_progress')) throw Object.assign(new Error('Dropbox is still preparing the preview. Try View again in a minute, or use the Download link.'), { status: 503 });
+      throw Object.assign(new Error('A preview is not available for this file. Please use the Download link.'), { status: 415 });
+    }
+    if (!response.ok || !response.body) throw new Error(`Dropbox could not make the preview (HTTP ${response.status}).`);
+    return response;
+  }
+
   // Adds a new file. Returns null if the name is already taken (never overwrites).
   async function upload(path, bytes) {
     const response = await call(`${CONTENT}/files/upload`, {
@@ -123,5 +140,5 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return { id: data.id, rev: data.rev, name: data.name };
   }
 
-  return { download, listAll, listNames, upload };
+  return { download, listAll, listNames, preview, upload };
 }

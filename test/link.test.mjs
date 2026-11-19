@@ -13,24 +13,32 @@ const TEAM = '/Team/HR/HR_POLICY_Leave-and-Attendance_V2_2026-10-01.pdf';
 const LEAD = '/Leadership/Collective Design & Support/CDS_GUIDE_Soil-Food-Web_V1_2026-11-12.pdf';
 const CEO = '/Office of the CEO/Legal & Liasoning/LEGAL_REPORT_Board-Minutes_V1_2026-11-01.pdf';
 const DOCX = '/Team/Finance & Accounts/FIN_SOP_Expense-Claims_V1_2026-09-01.docx';
-const FILES = [file(TEAM), file(LEAD), file(CEO), file(DOCX)];
+const XLSX = '/Team/Finance & Accounts/FIN_DATA_Budget-Sheet_V1_2026-09-01.xlsx';
+const PPTX = '/Team/HR/HR_DECK_Onboarding_V1_2026-09-01.pptx';
+const ZIP = '/Team/HR/HR_DATA_Photos_V1_2026-09-01.zip';
+const FILES = [file(TEAM), file(LEAD), file(CEO), file(DOCX), file(XLSX), file(PPTX), file(ZIP)];
 const PDF = '%PDF-1.7 test file';
 const KEY = Buffer.alloc(32, 7);
 const viewer = level => ({ name: `t-${level}`, level });
 const name = path => path.split('/').pop();
 const lister = () => createLister({ listAll: async () => FILES }, () => NOW);
 
-test('makes a view link for PDFs and a download link for every file', async () => {
+test('makes a view link for PDFs and Office files, and a download link for every file', async () => {
   const linker = createLinker(lister(), KEY, () => NOW);
   const pdf = await linker.make({ file_name: name(LEAD) }, viewer('leader'), 'https://kms.example');
   assert.match(pdf.view_link, /^https:\/\/kms\.example\/doc\/[\w-]+\.[\w-]+$/);
   assert.equal(pdf.download_link, `${pdf.view_link}?download=1`);
   assert.equal(pdf.title, 'Soil Food Web');
   assert.equal(pdf.expires_at, '2026-11-19T10:00:00.000Z');
-  const word = await linker.make({ file_name: name(DOCX) }, viewer('employee'), 'https://kms.example');
-  assert.equal(word.view_link, null);
-  assert.match(word.download_link, /\?download=1$/);
-  assert.match(word.how_to_show, /"Download" link only/);
+  for (const office of [DOCX, XLSX, PPTX]) {
+    const doc = await linker.make({ file_name: name(office) }, viewer('employee'), 'https://kms.example');
+    assert.match(doc.view_link, /\/doc\//, office);
+    assert.match(doc.how_to_show, /Show both links/);
+  }
+  const zip = await linker.make({ file_name: name(ZIP) }, viewer('employee'), 'https://kms.example');
+  assert.equal(zip.view_link, null);
+  assert.match(zip.download_link, /\?download=1$/);
+  assert.match(zip.how_to_show, /"Download" link only/);
 });
 
 test('documents above the caller level look exactly like missing ones', async () => {
@@ -127,5 +135,82 @@ test('a file gone from Dropbox gives a plain message, not a crash', async () => 
     const response = await fetch(ok.view_link);
     assert.equal(response.status, 502);
     assert.match(await response.text(), /no longer in Dropbox/);
+  } finally { server.close(); }
+});
+
+// A server whose fake Dropbox answers previews with the given response.
+async function previewServer(previewResponse) {
+  const calls = [];
+  const app = createApp({ base: 'https://w.example', workspace: 't', token: 't', timeoutMs: 1000 }, {
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'a', expires_in: 14400 });
+      if (url.endsWith('/files/list_folder')) return Response.json({ has_more: false, entries: FILES.map(f => ({ '.tag': 'file', name: f.name, path_display: f.path, size: 1, server_modified: f.added })) });
+      if (url.endsWith('/files/get_preview')) return previewResponse(JSON.parse(options.headers['Dropbox-API-Arg']).path);
+      if (url.endsWith('/files/download')) return new Response('ORIGINAL', { status: 200 });
+      return new Response('unexpected', { status: 500 });
+    },
+    now: () => NOW, dropbox: { enabled: true, appKey: 'k', appSecret: 's', refreshToken: 'r', timeoutMs: 1000 },
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const linkFor = async path => {
+    const client = new Client({ name: 'test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+    const result = (await client.callTool({ name: 'get_document_link', arguments: { file_name: name(path) } })).structuredContent;
+    await client.close();
+    return result;
+  };
+  return { server, calls, linkFor };
+}
+
+test('Office files: View shows the Dropbox preview, Download gives the original', async () => {
+  const { server, calls, linkFor } = await previewServer(path => path.endsWith('.xlsx')
+    ? new Response('<table><tr><td>1</td></tr></table>', { headers: { 'Content-Type': 'text/html' } })
+    : new Response(PDF, { headers: { 'Content-Type': 'application/pdf' } }));
+  try {
+    const word = await linkFor(DOCX);
+    const view = await fetch(word.view_link);
+    assert.equal(view.status, 200);
+    assert.equal(view.headers.get('content-type'), 'application/pdf');
+    assert.match(view.headers.get('content-disposition'), /^inline; filename="FIN_SOP_Expense-Claims_V1_2026-09-01\.pdf"/);
+    assert.equal(await view.text(), PDF);
+    assert.deepEqual(JSON.parse(calls.find(call => call.url.endsWith('/files/get_preview')).options.headers['Dropbox-API-Arg']), { path: DOCX });
+
+    const download = await fetch(word.download_link);
+    assert.match(download.headers.get('content-disposition'), /^attachment; filename="FIN_SOP_Expense-Claims_V1_2026-09-01\.docx"/);
+    assert.match(download.headers.get('content-type'), /wordprocessingml/);
+    assert.equal(await download.text(), 'ORIGINAL');
+
+    const sheet = await fetch((await linkFor(XLSX)).view_link);
+    assert.match(sheet.headers.get('content-type'), /^text\/html/);
+    assert.match(sheet.headers.get('content-security-policy'), /sandbox/);
+    assert.match(await sheet.text(), /<table>/);
+
+    const slides = await fetch((await linkFor(PPTX)).view_link);
+    assert.equal(slides.headers.get('content-type'), 'application/pdf');
+  } finally { server.close(); }
+});
+
+test('when Dropbox cannot preview, View says so plainly and Download still works', async () => {
+  const answers = {
+    [DOCX]: () => Response.json({ error_summary: 'in_progress/..' }, { status: 409 }),
+    [PPTX]: () => Response.json({ error_summary: 'unsupported_content/..' }, { status: 409 }),
+    [XLSX]: () => new Response('zip bytes', { headers: { 'Content-Type': 'application/zip' } }),
+  };
+  const { server, linkFor } = await previewServer(path => answers[path]());
+  try {
+    const busy = await linkFor(DOCX);
+    const preparing = await fetch(busy.view_link);
+    assert.equal(preparing.status, 503);
+    assert.match(await preparing.text(), /still preparing the preview/);
+    assert.equal(await (await fetch(busy.download_link)).text(), 'ORIGINAL');
+
+    for (const path of [PPTX, XLSX]) {
+      const response = await fetch((await linkFor(path)).view_link);
+      assert.equal(response.status, 415, path);
+      assert.match(await response.text(), /use the Download link/);
+    }
   } finally { server.close(); }
 });
