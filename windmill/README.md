@@ -1,7 +1,7 @@
-# KMS inbox intake (Windmill) — not deployed
+# KMS inbox intake (Windmill) — deployed 19 Nov 2026, every 10 minutes
 
 `kms_inbox_intake.ts` becomes `f/kms/kms_inbox_intake` in the `beforest-automations` workspace, run every
-5 minutes. It reads `beforestai@gmail.com` and adds documents that arrive in two ways:
+10 minutes. It reads `beforestai@gmail.com` and adds documents that arrive in two ways:
 
 | Way in | What the person does | What is added |
 |---|---|---|
@@ -33,4 +33,4 @@ State is kept in the Postgres table `kms_inbox_intake` (created on first run).
    (kind, sender, level, department, files). Check that the share message reached the email and that the
    sender (Reply-To) is right.
 3. Run once with `dry_run = false` and check Dropbox, the pipeline run and the reply email.
-4. Add the 5-minute schedule.
+4. Add the 10-minute schedule.

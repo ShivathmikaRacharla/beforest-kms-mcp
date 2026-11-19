@@ -1,4 +1,4 @@
-// f/kms/kms_inbox_intake  (Windmill, Bun)  — NOT DEPLOYED. Review, then add to Windmill with a 5-minute schedule.
+// f/kms/kms_inbox_intake  (Windmill, Bun). Deployed 19 Nov 2026; schedule f/kms/kms_inbox_intake_every_5_minutes runs it every 10 minutes.
 //
 // Reads the KMS intake inbox (beforestai@gmail.com) and handles two kinds of message:
 //   1. An email with attachments  -> the attachments are added.
