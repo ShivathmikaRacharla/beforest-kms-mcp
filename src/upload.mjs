@@ -11,7 +11,7 @@ import { FOLDER_BY_LEVEL, departmentList, matchDepartment } from './departments.
 //    and start the existing indexing pipeline with the Dropbox file id.
 // Claude cannot pass a file to a tool, which is why the file goes through the page.
 
-export const FILE_TYPES = ['pdf', 'docx', 'pptx', 'xlsx', 'txt', 'md'];
+export const FILE_TYPES = ['pdf', 'docx', 'pptx', 'xlsx', 'csv', 'txt', 'md'];
 const LINK_MS = 4 * 60 * 60 * 1000;
 const VISIBLE_TO = { employee: 'everyone at Beforest', leader: 'leaders and the Office of the CEO', oceo: 'the Office of the CEO only' };
 
@@ -60,6 +60,14 @@ export function safeFileName(original) {
   return base.slice(0, 180 - (base.length - dot)).trim() + base.slice(dot);
 }
 
+// Dropbox's content hash: SHA-256 of each 4 MB block, then SHA-256 of those hashes joined.
+// Same as the email intake uses, so the same file is refused by both.
+export function dropboxContentHash(bytes) {
+  const blocks = [];
+  for (let i = 0; i < bytes.length; i += 4194304) blocks.push(createHash('sha256').update(bytes.subarray(i, i + 4194304)).digest());
+  return createHash('sha256').update(Buffer.concat(blocks)).digest('hex');
+}
+
 // "Plan.pdf" -> "Plan (2).pdf"
 const numbered = (name, n) => (n === 1 ? name : name.replace(/(\.[^.]+)$/, ` (${n})$1`));
 
@@ -75,6 +83,7 @@ export function checkFile(name, bytes, maxBytes) {
     docx: () => zip && bytes.includes('word/'),
     pptx: () => zip && bytes.includes('ppt/'),
     xlsx: () => zip && bytes.includes('xl/'),
+    csv: () => isText(bytes),
     txt: () => isText(bytes),
     md: () => isText(bytes),
   }[extension]();
@@ -168,6 +177,9 @@ export function createUploader(config, { key, dropbox, startProcess, auth, now =
     const folder = `/${levelFolder}/${payload.s}`;
     let saved;
     try {
+      // The same file (same bytes, any name) already in this folder is not added again, like the email intake.
+      const same = await dropbox.findSameContent(folder, dropboxContentHash(bytes));
+      if (same) throw new UploadError(409, `Not added: this file is already in the KMS as "${same.name}" (${levelFolder} / ${payload.s}).`);
       // Never overwrite: if the name is taken, use "name (2).ext", "name (3).ext", ...
       for (let n = 1; n <= 20 && !saved; n++) {
         const fileName = numbered(name, n);

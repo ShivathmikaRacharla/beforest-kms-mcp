@@ -104,7 +104,7 @@ so are opens (`event: view` / `download`).
 2. `upload_document(department)` accepts short names and small typos (`hr`, `fin`, `Finanace`, `BI`,
    "Team / HR"). Unclear text is refused with the list of departments, never guessed. It returns a private
    upload page link (`/upload#<signed token>`), valid once for 4 hours.
-3. On the page the person picks the file: PDF, DOCX, PPTX, XLSX, TXT or MD, up to `UPLOAD_MAX_MB` (150).
+3. On the page the person picks the file: PDF, DOCX, PPTX, XLSX, CSV, TXT or MD, up to `UPLOAD_MAX_MB` (150). The same file (exact same content, any name) already in that department folder is refused, as in the email intake.
    The real file type is checked. The file keeps its own name in `<Level>/<Department>/`; an existing file
    is never overwritten (`name (2).pdf` instead).
 4. The server then starts the existing pipeline `f/kms/process_approved_document_pipeline` with the Dropbox
