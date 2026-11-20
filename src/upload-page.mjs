@@ -45,7 +45,7 @@ progress { width:100%; height:8px; accent-color:var(--green-mid); }
       <dt>Who can find it</dt><dd id="f-visible"></dd>
     </dl>
     <label class="pick">Choose the file
-      <input id="file" type="file" accept=".pdf,.docx,.pptx,.xlsx,.txt,.md">
+      <input id="file" type="file" accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md">
     </label>
     <p id="limits" class="muted"></p>
     <button id="send" disabled>Upload</button>
@@ -76,7 +76,7 @@ export const PAGE_JS = `(() => {
       limits = data;
       $('f-folder').textContent = data.folder;
       $('f-visible').textContent = data.visible_to;
-      $('limits').textContent = 'PDF, Word, PowerPoint, Excel, TXT or MD · up to ' + Math.round(data.max_bytes / 1048576) + ' MB';
+      $('limits').textContent = 'PDF, Word, PowerPoint, Excel, CSV, TXT or MD · up to ' + Math.round(data.max_bytes / 1048576) + ' MB';
       $('loading').hidden = true;
       $('form').hidden = false;
     })

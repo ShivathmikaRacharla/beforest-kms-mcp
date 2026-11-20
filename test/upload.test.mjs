@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { readAuthConfig } from '../src/auth.mjs';
 import { createApp } from '../src/server.mjs';
 import { matchDepartment } from '../src/departments.mjs';
-import { checkFile, safeFileName, readUploadConfig } from '../src/upload.mjs';
+import { checkFile, dropboxContentHash, safeFileName, readUploadConfig } from '../src/upload.mjs';
 import { readProcessConfig } from '../src/process.mjs';
 
 const NOW = Date.parse('2026-11-19T06:00:00Z');
@@ -33,6 +33,8 @@ test('files: the real type is checked, names are kept, sizes are limited', () =>
   assert.equal(checkFile('a.pptx', zip('ppt'), 1000), 'pptx');
   assert.equal(checkFile('a.xlsx', zip('xl'), 1000), 'xlsx');
   assert.throws(() => checkFile('a.docx', zip('ppt'), 1000), /real \.docx/);
+  assert.equal(checkFile('leads.csv', Buffer.from('name,city\nAsha,Hyderabad\n'), 1000), 'csv');
+  assert.throws(() => checkFile('leads.csv', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 1]), 1000), /real \.csv/);
   assert.throws(() => checkFile('a.pdf', Buffer.from('MZ fake'), 1000), /real \.pdf/);
   assert.throws(() => checkFile('a.exe', PDF, 1000), error => error.status === 415);
   assert.throws(() => checkFile('a.pdf', PDF, 5), error => error.status === 413);
@@ -41,12 +43,15 @@ test('files: the real type is checked, names are kept, sizes are limited', () =>
   assert.throws(() => safeFileName('no-extension'));
 });
 
-async function startApp({ pipeline = async () => Response.json('job-123'), conflicts = 0, processing = true } = {}) {
+async function startApp({ pipeline = async () => Response.json('job-123'), conflicts = 0, processing = true, existing = [] } = {}) {
   const calls = { uploads: [], pipeline: [] };
   let taken = conflicts;
   const fetchImpl = async (url, options) => {
     if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'a', expires_in: 14400 });
-    if (url.endsWith('/files/list_folder')) return Response.json({ has_more: false, entries: [] });
+    if (url.endsWith('/files/list_folder')) {
+      const { path } = JSON.parse(options.body);
+      return Response.json({ has_more: false, entries: existing.filter(file => file.folder === path).map(file => ({ '.tag': 'file', name: file.name, path_display: `${path}/${file.name}`, content_hash: dropboxContentHash(file.bytes) })) });
+    }
     if (url.endsWith('/files/upload')) {
       const arg = JSON.parse(options.headers['Dropbox-API-Arg']);
       calls.uploads.push(arg);
@@ -154,6 +159,22 @@ test('if indexing cannot start, the file is still saved and the person is told',
     assert.equal(result.saved, true);
     assert.equal(result.indexing, 'not_started');
     assert.match(result.message, /tell the KMS team/);
+  } finally { server.close(); }
+});
+
+test('the same file is not added twice, whatever its name; a different file with a taken name still gets " (2)"', async () => {
+  assert.equal(dropboxContentHash(Buffer.alloc(0)), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  const { server, calls, mcp, send } = await startApp({ existing: [{ folder: '/Team/HR', name: 'Policy.pdf', bytes: PDF }], conflicts: 1 });
+  try {
+    const link = async () => (await mcp(TEAM, client => client.callTool({ name: 'upload_document', arguments: { department: 'HR' } }))).structuredContent.upload_link;
+    const first = await link();
+    const duplicate = await send(first, 'Policy copy.pdf', PDF);
+    assert.equal(duplicate.status, 409);
+    assert.match((await duplicate.json()).error, /already in the KMS as "Policy.pdf" \(Team \/ HR\)/);
+    assert.equal(calls.uploads.length, 0);
+    assert.equal(calls.pipeline.length, 0);
+    const other = await (await send(first, 'Policy.pdf', Buffer.from('%PDF-1.7 a newer policy'))).json();
+    assert.equal(other.file_name, 'Policy (2).pdf');
   } finally { server.close(); }
 });
 

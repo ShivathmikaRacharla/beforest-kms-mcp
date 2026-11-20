@@ -122,7 +122,7 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
       });
       server.registerTool('upload_document', {
         title: 'Upload a document to the Beforest knowledge base',
-        description: 'Call only after the person has chosen a department from list_departments. Returns a private upload page link for their own level and that department. Claude cannot pass the file itself, so send the person the upload_link: they open it, choose the file (PDF, Word, PowerPoint, Excel, TXT or MD, up to 150 MB) and press Upload. The page shows the result: file name, folder, Dropbox destination and whether indexing started. The level cannot be changed. The link works once and stops after 4 hours. Send it only to the person who asked.',
+        description: 'Call only after the person has chosen a department from list_departments. Returns a private upload page link for their own level and that department. Claude cannot pass the file itself, so send the person the upload_link: they open it, choose the file (PDF, Word, PowerPoint, Excel, CSV, TXT or MD, up to 150 MB) and press Upload. The page shows the result: file name, folder, Dropbox destination and whether indexing started. The level cannot be changed. The link works once and stops after 4 hours. Send it only to the person who asked.',
         inputSchema: uploadShape,
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }, async (input) => {

@@ -86,6 +86,19 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     }
   }
 
+  // The first file in a folder with exactly this Dropbox content hash, or null (read-only).
+  async function findSameContent(folder, hash) {
+    let response = await rpc('files/list_folder', { path: folder, limit: 2000 });
+    for (;;) {
+      if (!response.ok) throw new Error(`Dropbox folder check failed (HTTP ${response.status}).`);
+      const data = await response.json();
+      const same = (data.entries || []).find(entry => entry['.tag'] === 'file' && entry.content_hash === hash);
+      if (same) return { name: same.name, path: same.path_display };
+      if (!data.has_more) return null;
+      response = await rpc('files/list_folder/continue', { cursor: data.cursor });
+    }
+  }
+
   // Opens one file for reading (read-only). Returns the response, whose body streams the file.
   async function download(path) {
     const response = await call(`${CONTENT}/files/download`, {
@@ -140,5 +153,5 @@ export function createDropbox(config, fetchImpl = fetch, now = Date.now) {
     return { id: data.id, rev: data.rev, name: data.name };
   }
 
-  return { download, listAll, listNames, preview, upload };
+  return { download, findSameContent, listAll, listNames, preview, upload };
 }
