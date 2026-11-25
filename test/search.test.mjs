@@ -15,9 +15,9 @@ test('validates configuration without echoing credentials', () => {
   assert.throws(() => readConfig({}), /Set WINDMILL/);
   assert.throws(() => readConfig({ WINDMILL_BASE_URL: 'ftp://example', WINDMILL_WORKSPACE: 'x', WINDMILL_TOKEN: 'secret' }), /Invalid/);
 });
-test('calls only the fixed retrieval script and preserves citation fields', async () => {
+test('calls only the V1 verified search script and preserves citation fields', async () => {
   const search = createSearch(config, async (url, options) => {
-    assert.equal(url, 'https://windmill.example/api/w/test/jobs/run_wait_result/p/f/kms/retrieve_qdrant_chunks');
+    assert.equal(url, 'https://windmill.example/api/w/test/jobs/run_wait_result/p/f/kms/retrieve_verified_chunks');
     assert.deepEqual(JSON.parse(options.body), { question: 'Policy?', department: 'HR', limit: 3, role: 'oceo' });
     assert.equal(options.headers.Authorization, 'Bearer secret-test-token');
     assert.equal(options.redirect, 'error');
@@ -33,6 +33,12 @@ test('invalid inputs never call Windmill', async () => {
   const search = createSearch(config, async () => { calls++; return json(fixture); });
   for (const input of [{ question: '' }, { question: 'x', limit: 21 }, { question: 'x', limit: 1.5 }, { question: 'x', script_path: 'other' }]) await assert.rejects(search(input, boss));
   assert.equal(calls, 0);
+});
+test('V1: when the check keeps nothing, the search is still successful and returns no passages', async () => {
+  const v1 = { retrieved: true, document_count: 2, matches: [], verification: { min_score: 0.65, returned_by_search: 5, kept: 0, dropped: 5 } };
+  const result = await createSearch(config, async () => json(v1))({ question: 'Who audits the accounts?' }, boss);
+  assert.deepEqual(result.matches, []);
+  assert.equal(result.verification, undefined);
 });
 test('empty results are a successful search', async () => {
   const result = await createSearch(config, async () => json({ retrieved: false, matches: [] }))({ question: 'Unknown' }, boss);

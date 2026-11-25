@@ -1,8 +1,11 @@
 # Beforest knowledge MCP wrapper
 
 Standalone service exposing `search_knowledge(question, department?, limit=5)` over
-Streamable HTTP. Calls only `f/kms/retrieve_qdrant_chunks` in the configured Windmill
-workspace. Returns passages, scores and source locations as text JSON and structured
+Streamable HTTP. Calls only `f/kms/retrieve_verified_chunks` in the configured Windmill
+workspace. That script is the V1 check: it runs `f/kms/retrieve_qdrant_chunks` unchanged and
+passes on only passages with a match score of at least `f/kms/KMS_MIN_SCORE` (0.65), so
+off-topic passages never reach the answer. To undo, point `SEARCH_SCRIPT` in `src/search.mjs`
+back to `f/kms/retrieve_qdrant_chunks`. Returns passages, scores and source locations as text JSON and structured
 content. The connected AI generates the answer. No uploads or writes to Qdrant.
 Windmill does record search jobs and Gemini usage may incur costs.
 

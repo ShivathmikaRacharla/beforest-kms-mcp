@@ -14,10 +14,19 @@ const matchSchema = z.object({
   section: z.string().nullable().optional(),
   min_role: z.string().nullable().optional(),
 });
+// The V1 check's note: how many passages the search returned and how many passed the score cut-off.
+const verificationSchema = z.object({
+  min_score: z.number().optional(), returned_by_search: z.number().int().nonnegative().optional(),
+  kept: z.number().int().nonnegative().optional(), dropped: z.number().int().nonnegative().optional(),
+}).partial();
 const resultSchema = z.object({
   retrieved: z.boolean(), matches: z.array(matchSchema),
   document_count: z.number().int().nonnegative().optional(),
+  verification: verificationSchema.optional(),
 });
+// V1 verification layer: runs f/kms/retrieve_qdrant_chunks unchanged, then keeps only passages
+// scoring at least f/kms/KMS_MIN_SCORE (0.65), so off-topic passages never reach the answer.
+export const SEARCH_SCRIPT = 'f/kms/retrieve_verified_chunks';
 
 export function readConfig(env = process.env) {
   const base = env.WINDMILL_BASE_URL?.trim();
@@ -49,11 +58,11 @@ export function createSearch(config, fetchImpl = fetch) {
     const input = inputSchema.parse(rawInput);
     const full = viewer.level === 'oceo';
     // Ask for more than needed when some passages may be filtered out below.
-    // role lets retrieve_qdrant_chunks filter by level before any passage leaves Windmill.
+    // role lets the search filter by level before any passage leaves Windmill.
     const upstream = { ...(full ? input : { ...input, limit: Math.min(20, input.limit * 4) }), role: viewer.level };
     let response;
     try {
-      response = await fetchImpl(`${config.base}/api/w/${encodeURIComponent(config.workspace)}/jobs/run_wait_result/p/f/kms/retrieve_qdrant_chunks`, {
+      response = await fetchImpl(`${config.base}/api/w/${encodeURIComponent(config.workspace)}/jobs/run_wait_result/p/${SEARCH_SCRIPT}`, {
         method: 'POST', redirect: 'error',
         headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(upstream), signal: AbortSignal.timeout(config.timeoutMs),
@@ -67,7 +76,7 @@ export function createSearch(config, fetchImpl = fetch) {
     try { data = resultSchema.parse(await response.json()); }
     catch { throw new Error('Knowledge search returned an unexpected response.'); }
     const allowed = data.matches.filter(match => LEVELS.indexOf(passageLevel(match)) <= LEVELS.indexOf(viewer.level));
-    console.log(JSON.stringify({ event: 'search', user: viewer.name, level: viewer.level, returned: Math.min(allowed.length, input.limit), hidden: data.matches.length - allowed.length }));
+    console.log(JSON.stringify({ event: 'search', user: viewer.name, level: viewer.level, returned: Math.min(allowed.length, input.limit), hidden: data.matches.length - allowed.length, v1_kept: data.verification?.kept ?? null, v1_dropped: data.verification?.dropped ?? null }));
     return {
       question: input.question, department: input.department ?? null,
       // Total document count is only shown to full access; it says how much exists beyond a person's level.
