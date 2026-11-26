@@ -37,7 +37,12 @@ export function readConfig(env = process.env) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid Windmill base URL.');
   const timeoutMs = Number(env.WINDMILL_TIMEOUT_MS || 30000);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120000) throw new Error('Invalid Windmill timeout.');
-  return { base: base.replace(/\/+$/, ''), workspace, token, timeoutMs };
+  // Waiting line: at most this many searches inside Windmill at once; the rest wait here, up to queueWaitMs.
+  const maxParallel = Number(env.KMS_MAX_PARALLEL_SEARCHES || 2);
+  if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 50) throw new Error('Invalid KMS_MAX_PARALLEL_SEARCHES.');
+  const queueWaitMs = Number(env.KMS_SEARCH_QUEUE_WAIT_MS || 20000);
+  if (!Number.isInteger(queueWaitMs) || queueWaitMs < 0 || queueWaitMs > 120000) throw new Error('Invalid KMS_SEARCH_QUEUE_WAIT_MS.');
+  return { base: base.replace(/\/+$/, ''), workspace, token, timeoutMs, maxParallel, queueWaitMs };
 }
 
 // Dropbox level folders (any depth) -> level. Folder names are matched case-insensitively.
@@ -52,7 +57,41 @@ export function passageLevel(match) {
   return LEVELS[Math.max(LEVELS.indexOf(folder ?? 'employee'), LEVELS.indexOf(stored ?? 'employee'))];
 }
 
-export function createSearch(config, fetchImpl = fetch) {
+// The waiting line. Only `max` searches go to Windmill at the same time, so the KMS workers never jam
+// (each search holds 2 Windmill workers: the V1 check and the search it waits for). Others wait their turn,
+// first come first served; anyone still waiting after `waitMs` is told the KMS is busy.
+// It only decides WHEN a search is sent; what is searched and returned is unchanged.
+export function createLine(max = 2, waitMs = 20000) {
+  let running = 0;
+  const waiting = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (next) { clearTimeout(next.timer); next.resolve(); } else running--;
+  };
+  const enter = () => {
+    if (running < max) { running++; return Promise.resolve(); }
+    return new Promise((resolve, reject) => {
+      const entry = { resolve };
+      entry.timer = setTimeout(() => {
+        waiting.splice(waiting.indexOf(entry), 1);
+        reject(new Error('The KMS is busy right now. Please try again in a minute.'));
+      }, waitMs);
+      waiting.push(entry);
+    });
+  };
+  return {
+    async run(task) {
+      const queuedAt = Date.now();
+      await enter();
+      const waitedMs = Date.now() - queuedAt;
+      try { return { value: await task(), waitedMs }; } finally { release(); }
+    },
+    get running() { return running; },
+    get waiting() { return waiting.length; },
+  };
+}
+
+export function createSearch(config, fetchImpl = fetch, line = createLine(config.maxParallel, config.queueWaitMs)) {
   return async (rawInput, viewer) => {
     if (!LEVELS.includes(viewer?.level)) throw new Error('Knowledge search needs a signed-in user.');
     const input = inputSchema.parse(rawInput);
@@ -60,6 +99,8 @@ export function createSearch(config, fetchImpl = fetch) {
     // Ask for more than needed when some passages may be filtered out below.
     // role lets the search filter by level before any passage leaves Windmill.
     const upstream = { ...(full ? input : { ...input, limit: Math.min(20, input.limit * 4) }), role: viewer.level };
+    const waitingAhead = line.waiting;
+    const { value: data, waitedMs } = await line.run(async () => {
     let response;
     try {
       response = await fetchImpl(`${config.base}/api/w/${encodeURIComponent(config.workspace)}/jobs/run_wait_result/p/${SEARCH_SCRIPT}`, {
@@ -72,11 +113,11 @@ export function createSearch(config, fetchImpl = fetch) {
       throw new Error('Knowledge search is unavailable. Please try again later.');
     }
     if (!response.ok) throw new Error(`Knowledge search failed (HTTP ${response.status}).`);
-    let data;
-    try { data = resultSchema.parse(await response.json()); }
+    try { return resultSchema.parse(await response.json()); }
     catch { throw new Error('Knowledge search returned an unexpected response.'); }
+    });
     const allowed = data.matches.filter(match => LEVELS.indexOf(passageLevel(match)) <= LEVELS.indexOf(viewer.level));
-    console.log(JSON.stringify({ event: 'search', user: viewer.name, level: viewer.level, returned: Math.min(allowed.length, input.limit), hidden: data.matches.length - allowed.length, v1_kept: data.verification?.kept ?? null, v1_dropped: data.verification?.dropped ?? null }));
+    console.log(JSON.stringify({ event: 'search', user: viewer.name, level: viewer.level, returned: Math.min(allowed.length, input.limit), hidden: data.matches.length - allowed.length, v1_kept: data.verification?.kept ?? null, v1_dropped: data.verification?.dropped ?? null, waited_ms: waitedMs, waiting_ahead: waitingAhead }));
     return {
       question: input.question, department: input.department ?? null,
       // Total document count is only shown to full access; it says how much exists beyond a person's level.

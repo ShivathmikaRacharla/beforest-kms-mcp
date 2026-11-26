@@ -79,3 +79,38 @@ test('official MCP client discovers tool, searches, rejects invalid limits, and 
     assert.match(fail.content[0].text, /HTTP 503/);
   } finally { await client.close(); await new Promise(resolve => listener.close(resolve)); }
 });
+
+test('waiting line: only 2 searches reach Windmill at once, the rest wait their turn', async () => {
+  let inside = 0, most = 0, calls = 0;
+  const slow = async () => { calls++; inside++; most = Math.max(most, inside); await new Promise(r => setTimeout(r, 30)); inside--; return json(fixture); };
+  const search = createSearch({ ...config, maxParallel: 2, queueWaitMs: 5000 }, slow);
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => search({ question: `q${i}` }, boss)));
+  assert.equal(calls, 10);
+  assert.equal(most, 2);
+  for (const result of results) assert.equal(result.matches[0].text, 'A relevant passage.');
+});
+
+test('waiting line: a search that waits too long is told the KMS is busy', async () => {
+  const stuck = async () => { await new Promise(r => setTimeout(r, 200)); return json(fixture); };
+  const search = createSearch({ ...config, maxParallel: 1, queueWaitMs: 20 }, stuck);
+  const first = search({ question: 'first' }, boss);
+  await assert.rejects(search({ question: 'second' }, boss), /KMS is busy/);
+  assert.equal((await first).matches.length, 1);
+});
+
+test('waiting line: a failed search frees its place for the next one', async () => {
+  let n = 0;
+  const flaky = async () => (n++ === 0 ? new Response('no', { status: 500 }) : json(fixture));
+  const search = createSearch({ ...config, maxParallel: 1, queueWaitMs: 1000 }, flaky);
+  const [a, b] = await Promise.allSettled([search({ question: 'a' }, boss), search({ question: 'b' }, boss)]);
+  assert.equal(a.status, 'rejected');
+  assert.equal(b.status, 'fulfilled');
+});
+
+test('waiting line settings are validated', () => {
+  const base = { WINDMILL_BASE_URL: 'https://windmill.example', WINDMILL_WORKSPACE: 'x', WINDMILL_TOKEN: 'secret' };
+  assert.equal(readConfig(base).maxParallel, 2);
+  assert.equal(readConfig(base).queueWaitMs, 20000);
+  assert.throws(() => readConfig({ ...base, KMS_MAX_PARALLEL_SEARCHES: '0' }), /KMS_MAX_PARALLEL_SEARCHES/);
+  assert.throws(() => readConfig({ ...base, KMS_SEARCH_QUEUE_WAIT_MS: 'abc' }), /KMS_SEARCH_QUEUE_WAIT_MS/);
+});

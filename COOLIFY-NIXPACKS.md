@@ -20,6 +20,8 @@ files or credentials. No existing KMS repository or Windmill change is required.
 | WINDMILL_WORKSPACE | beforest-automations |
 | WINDMILL_TOKEN | Token permitted to run the retrieval script |
 | WINDMILL_TIMEOUT_MS | 30000 |
+| KMS_MAX_PARALLEL_SEARCHES | Optional, default 2. Searches sent to Windmill at the same time; the rest wait in line. Each search holds 2 Windmill workers, so use half the KMS worker count |
+| KMS_SEARCH_QUEUE_WAIT_MS | Optional, default 20000. How long a search may wait in line before "KMS is busy" |
 | NODE_ENV | production |
 | PORT | 3100 |
 | HOST | 0.0.0.0 |
