@@ -25,7 +25,7 @@ test('auth config requires strong secrets and is mandatory when asked', () => {
   assert.equal(readAuthConfig({}).enabled, false);
   assert.throws(() => readAuthConfig({}, { required: true }), /Set MCP_USERS/);
   assert.throws(() => readAuthConfig({ MCP_AUTH_TOKENS: 'short' }), /at least 32/);
-  assert.throws(() => readAuthConfig({ MCP_AUTH_TOKENS: `${current},tiny` }), /at least 32/);
+  assert.equal(readAuthConfig({ MCP_AUTH_TOKENS: `${current},tiny` }).users.length, 1, 'a short token is skipped, the good one still works');
   assert.equal(readAuthConfig({ MCP_AUTH_TOKENS: ` ${current} , ${next} ` }).users.length, 2);
 });
 test('rejects missing, malformed and wrong secrets before the MCP layer', async () => {
@@ -61,4 +61,35 @@ test('local-only mode without secrets stays open for development', async () => {
   const { listener, base } = await serve(readAuthConfig({}), async () => json({ matches: [] }));
   try { assert.equal((await post(base)).status, 200); }
   finally { await new Promise(resolve => listener.close(resolve)); }
+});
+
+test('one wrong MCP_USERS entry is skipped; everyone else keeps working', () => {
+  const good1 = 'g'.repeat(40), good2 = 'h'.repeat(40), bad = 'i'.repeat(40);
+  const cases = [
+    [`harsha:oceo: ${bad}`, /name:level:token|at least 32/],            // space after oceo:
+    [`MCP_USERS=harsha:oceo:${bad}`, /names may only/],                 // name pasted with the variable name
+    [`harsha:leadership:${bad}`, /level must be one of/],               // wrong level word
+    [`harsha:oceo:short`, /at least 32/],
+    [`harsha:oceo`, /name:level:token/],
+  ];
+  for (const [wrong, reason] of cases) {
+    const auth = readAuthConfig({ MCP_USERS: `seshu:employee:${good1},${wrong},soundharya:employee:${good2}` }, { required: true });
+    assert.deepEqual(auth.users.map(user => user.name), ['seshu', 'soundharya'], wrong);
+    assert.equal(auth.skipped.length, 1);
+    assert.equal(auth.skipped[0].entry, 'MCP_USERS entry 2');
+    assert.match(auth.skipped[0].reason, reason);
+    assert.doesNotMatch(JSON.stringify(auth.skipped), /i{10}|short/, 'the report never contains the token');
+  }
+});
+test('a repeated name or token skips every entry that shares it', () => {
+  const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
+  const sameName = readAuthConfig({ MCP_USERS: `x:employee:${a},X:oceo:${b},y:leader:${c}` });
+  assert.deepEqual(sameName.users.map(user => user.name), ['y']);
+  const sameToken = readAuthConfig({ MCP_USERS: `x:employee:${a},y:oceo:${a},z:leader:${c}` });
+  assert.deepEqual(sameToken.users.map(user => user.name), ['z'], 'nobody gets in with a token two people share');
+});
+test('the server still refuses to start when no entry is valid', () => {
+  assert.throws(() => readAuthConfig({ MCP_USERS: 'harsha:leadership:' + 'a'.repeat(40) }), /No valid token entries/);
+  assert.throws(() => readAuthConfig({ MCP_USERS: 'x:oceo:short,y:oceo' }, { required: true }), /No valid token entries/);
+  assert.throws(() => readAuthConfig({ MCP_USERS: '' }, { required: true }), /Set MCP_USERS/);
 });

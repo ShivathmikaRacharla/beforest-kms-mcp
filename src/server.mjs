@@ -192,6 +192,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(dropbox.enabled && processing.enabled ? `list_departments and upload_document are on (max ${Math.round(upload.maxBytes / 1048576)} MB).` : 'list_departments and upload_document are off (needs the Dropbox settings and WINDMILL_WEBHOOK_URL / WINDMILL_WEBHOOK_TOKEN).');
     console.log(`MCP listening on ${network.host}:${listener.address().port}; endpoint /mcp`);
     console.log(auth.enabled ? 'Bearer authentication is enabled on /mcp.' : 'Authentication is not enabled (local-only mode).');
+    if (auth.enabled) console.log(`Signed-in users loaded: ${auth.users.map(user => `${user.name} (${user.level})`).join(', ')}.`);
+    // Never prints the entry itself: it may contain a token.
+    for (const { entry, reason } of auth.skipped ?? []) console.error(`WARNING: ${entry} was skipped and cannot sign in. ${reason}`);
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => listener.close());
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
