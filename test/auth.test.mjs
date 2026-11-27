@@ -93,3 +93,12 @@ test('the server still refuses to start when no entry is valid', () => {
   assert.throws(() => readAuthConfig({ MCP_USERS: 'x:oceo:short,y:oceo' }, { required: true }), /No valid token entries/);
   assert.throws(() => readAuthConfig({ MCP_USERS: '' }, { required: true }), /Set MCP_USERS/);
 });
+test('only /mcp reads a JSON body, and only after the token check', async () => {
+  const { listener, base } = await serve(readAuthConfig({ MCP_AUTH_TOKENS: current }), async () => json({ matches: [] }));
+  const bad = { method: 'POST', body: '{not json', headers: { 'Content-Type': 'application/json' } };
+  try {
+    assert.equal((await fetch(base + '/health', bad)).status, 404, 'other addresses never parse JSON');
+    assert.equal((await fetch(base + '/mcp', bad)).status, 401, 'no token: refused before reading the body');
+    assert.equal((await fetch(base + '/mcp', { ...bad, headers: { ...bad.headers, Authorization: `Bearer ${current}` } })).status, 400, 'with a token: bad JSON is rejected');
+  } finally { await new Promise(resolve => listener.close(resolve)); }
+});

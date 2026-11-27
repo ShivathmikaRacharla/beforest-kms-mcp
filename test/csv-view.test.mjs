@@ -62,3 +62,15 @@ test('over MCP and the browser: a CSV gets View (table page, sandboxed) and Down
     assert.equal(await download.text(), body);
   } finally { server.close(); }
 });
+
+test('a CSV with one very wide row stays small: at most 200 columns are shown', async () => {
+  const { CSV_MAX_COLUMNS } = await import('../src/csv-view.mjs');
+  const text = 'a,b\n' + '1,2\n'.repeat(4000) + ','.repeat(50000) + '\n';
+  const started = Date.now();
+  const html = renderCsvPage('wide.csv', parseCsv(text));
+  // Worst case is 5,000 rows x 200 empty cells, about 9 MB; without the cap this file needs gigabytes.
+  assert.ok(html.length < 12_000_000, `page is ${html.length} bytes`);
+  assert.ok(Date.now() - started < 2000, 'renders quickly');
+  assert.equal((html.match(/<th>/g) || []).length, CSV_MAX_COLUMNS);
+  assert.match(html, /showing the first 200 of 50,001 columns/);
+});
