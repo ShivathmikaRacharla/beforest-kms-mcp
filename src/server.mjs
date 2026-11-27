@@ -32,7 +32,6 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
   });
   // Authenticate before parsing the body so unauthenticated callers cost nothing.
   app.use('/mcp', requireBearer(auth));
-  app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => res.json({ status: 'ok', mode: network.host === '0.0.0.0' ? 'container-private' : 'local-only' }));
   // Dropbox tools are on only when the Dropbox settings are present (uploads also need the pipeline start).
   const box = dropbox.enabled ? createDropbox(dropbox, fetchImpl, now) : undefined;
@@ -77,7 +76,8 @@ export function createApp(config, { fetchImpl = fetch, network = readNetworkConf
       }
     });
   }
-  app.post('/mcp', async (req, res) => {
+  // JSON is read only here, after the token check; no other address accepts a JSON body.
+  app.post('/mcp', express.json({ limit: '64kb' }), async (req, res) => {
     const server = new McpServer({ name: 'beforest-knowledge', version: '0.1.0' });
     const search = createSearch(config, fetchImpl, searchLine);
     server.registerTool('search_knowledge', {

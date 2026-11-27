@@ -2,6 +2,8 @@
 // preview is unreliable for CSV. All cell text is escaped and the page is served sandboxed (no scripts).
 export const CSV_MAX_ROWS = 5000;
 export const CSV_MAX_BYTES = 25 * 1024 * 1024;
+// One broken row with thousands of commas would otherwise make every row that wide (millions of cells).
+export const CSV_MAX_COLUMNS = 200;
 const FONT_ORIGIN = 'https://files.ops.beforest.co';
 
 // Bytes -> text: UTF-8 (BOM removed), or Windows-1252 for files saved by older Excel versions.
@@ -49,12 +51,15 @@ const number = n => n.toLocaleString('en-IN');
 
 export function renderCsvPage(name, { rows, total }) {
   const [head = [], ...body] = rows;
-  const width = Math.max(1, ...rows.map(r => r.length));
+  const fullWidth = rows.reduce((most, r) => Math.max(most, r.length), 1);
+  const width = Math.min(fullWidth, CSV_MAX_COLUMNS);
+  const cut = fullWidth > width;
   const cells = (r, tag) => Array.from({ length: width }, (_, i) => `<${tag}>${escape(r[i] ?? '')}</${tag}>`).join('');
   const dataRows = Math.max(0, total - 1);
+  const columns = `the first ${number(width)} of ${number(fullWidth)} columns`;
   const note = total > rows.length
-    ? `Showing the first ${number(body.length)} of ${number(dataRows)} rows. Use the Download link for the full file.`
-    : `${number(dataRows)} rows · ${number(width)} columns`;
+    ? `Showing the first ${number(body.length)} of ${number(dataRows)} rows${cut ? ` and ${columns}` : ''}. Use the Download link for the full file.`
+    : cut ? `${number(dataRows)} rows · showing ${columns}. Use the Download link for the full file.` : `${number(dataRows)} rows · ${number(width)} columns`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(name)}</title>
